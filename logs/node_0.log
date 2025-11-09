@@ -1,0 +1,43 @@
+2025-11-09 03:42:34,447 - node_0 - INFO - Node 0 initialized
+2025-11-09 03:42:35,499 - node_0 - INFO - Running consensus round 1
+2025-11-09 03:42:35,502 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:42:39,082 - node_0 - INFO - Running consensus round 2
+2025-11-09 03:42:41,504 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:42:42,500 - node_0 - INFO - Running consensus round 3
+2025-11-09 03:42:45,395 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:42:45,933 - node_0 - INFO - Running consensus round 4
+2025-11-09 03:45:34,232 - node_0 - INFO - Node 0 initialized
+2025-11-09 03:45:35,296 - node_0 - INFO - Running consensus round 1
+2025-11-09 03:45:35,302 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:45:38,806 - node_0 - INFO - Running consensus round 2
+2025-11-09 03:45:41,408 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:45:42,335 - node_0 - INFO - Running consensus round 3
+2025-11-09 03:45:44,360 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:45:46,031 - node_0 - INFO - Running consensus round 4
+2025-11-09 03:45:47,337 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:45:49,652 - node_0 - INFO - Running consensus round 5
+2025-11-09 03:45:50,240 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:45:53,262 - node_0 - INFO - Running consensus round 6
+2025-11-09 03:45:53,263 - node_0 - INFO - Proposed block: Block(hash=57bd154125523aceac17b361895073e4a03cc0248dd29e4c5d4ff2c738d2d506, leader=0, round=6, shard=0, transactions=1)
+2025-11-09 03:45:53,818 - node_0 - DEBUG - Sent batch of 1 messages to Node 1
+2025-11-09 03:45:53,819 - node_0 - DEBUG - Sent batch of 1 messages to Node 2
+2025-11-09 03:45:57,392 - node_0 - INFO - Running consensus round 7
+2025-11-09 03:46:00,356 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:46:01,092 - node_0 - INFO - Running consensus round 8
+2025-11-09 03:46:05,240 - node_0 - INFO - Running consensus round 9
+2025-11-09 03:46:06,920 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:46:06,924 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:46:08,865 - node_0 - INFO - Running consensus round 10
+2025-11-09 03:46:12,542 - node_0 - INFO - Running consensus round 11
+2025-11-09 03:46:12,560 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:46:13,302 - node_0 - ERROR - Error processing message: 
+2025-11-09 03:46:16,585 - node_0 - INFO - Running consensus round 12
+2025-11-09 03:46:16,585 - node_0 - INFO - Proposed block: Block(hash=c0a35a9ec59799c2639f971fe521714e138370e327a0cfcb41bb8b69c62e46b9, leader=0, round=12, shard=0, transactions=6)
+2025-11-09 03:46:18,351 - node_0 - DEBUG - Sent batch of 1 messages to Node 3
+2025-11-09 03:46:18,352 - node_0 - DEBUG - Sent batch of 1 messages to Node 4
+2025-11-09 03:46:18,354 - node_0 - DEBUG - Sent batch of 1 messages to Node 5
+2025-11-09 03:46:18,356 - node_0 - DEBUG - Sent batch of 1 messages to Node 1
+2025-11-09 03:46:18,925 - node_0 - DEBUG - Sent batch of 1 messages to Node 2
+2025-11-09 03:46:18,927 - node_0 - DEBUG - Sent batch of 1 messages to Node 3
+2025-11-09 03:46:23,057 - node_0 - INFO - Running consensus round 13
+2025-11-09 03:46:23,654 - node_0 - ERROR - Error processing message: 
