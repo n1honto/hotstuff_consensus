@@ -53,28 +53,32 @@ class HotStuffNode:
         previous_hash = self.blockchain[-1].hash if self.blockchain else "0"
         block = Block(transactions, previous_hash, self.current_leader, self.current_round, self.shard_id)
         self.current_block = block
-        self.logger.info(f"Proposed block: {block}")
+        self.logger.info(f"Предложен блок: {block}")
         return block
 
     async def encrypt_message(self, message: Dict) -> bytes:
+        self.logger.debug(f"Шифрование сообщения: {message}")
         return self.fernet.encrypt(json.dumps(message).encode())
 
     async def decrypt_message(self, encrypted: bytes) -> Dict:
-        return json.loads(self.fernet.decrypt(encrypted).decode())
+        decrypted = self.fernet.decrypt(encrypted).decode()
+        self.logger.debug(f"Расшифровано сообщение: {decrypted}")
+        return json.loads(decrypted)
 
     async def send_message(self, message: Dict, recipient_id: int):
         if recipient_id in self.byzantine_nodes:
-            self.logger.warning(f"Skipping Byzantine node {recipient_id}")
+            self.logger.warning(f"Пропущен византийский узел {recipient_id}")
             return
         try:
             start_time = time.time()
-            encrypted = self.fernet.encrypt(json.dumps(message).encode())
+            encrypted = await self.encrypt_message(message)
             self.message_batch.append((recipient_id, encrypted, start_time))
             current_time = time.time()
             if current_time - self.last_batch_time >= self.batch_interval:
                 await self.flush_message_batch()
+            self.logger.debug(f"Сообщение добавлено в пакет для узла {recipient_id}")
         except Exception as e:
-            self.logger.error(f"Error batching message to Node {recipient_id}: {e}")
+            self.logger.error(f"Ошибка при добавлении сообщения в пакет для узла {recipient_id}: {e}")
 
     async def flush_message_batch(self):
         if not self.message_batch:
@@ -93,7 +97,7 @@ class HotStuffNode:
                 await writer.drain()
                 writer.close()
                 await writer.wait_closed()
-                self.logger.debug(f"Sent batch of {len(messages)} messages to Node {recipient_id}")
+                self.logger.debug(f"Отправлен пакет из {len(messages)} сообщений узлу {recipient_id}")
                 self.metrics["messages_sent"].append((time.time(), len(messages)))
                 if self.monitor:
                     self.monitor.log_metric(self.node_id, "messages_sent", len(messages))
@@ -103,11 +107,11 @@ class HotStuffNode:
                     if self.monitor:
                         self.monitor.log_metric(self.node_id, "latency", latency)
             except Exception as e:
-                self.logger.error(f"Failed to send batch to Node {recipient_id}: {e}")
+                self.logger.error(f"Не удалось отправить пакет узлу {recipient_id}: {e}")
                 self.byzantine_nodes.add(recipient_id)
                 self.behavior_scores[recipient_id] += 1
                 if self.behavior_scores[recipient_id] > 3:
-                    self.logger.warning(f"Node {recipient_id} marked as Byzantine due to repeated errors")
+                    self.logger.warning(f"Узел {recipient_id} помечен как византийский из-за повторяющихся ошибок")
 
     async def handle_message(self, reader, writer):
         while True:
@@ -118,8 +122,7 @@ class HotStuffNode:
                 msg_len = int.from_bytes(data, "big")
                 encrypted = await reader.read(msg_len)
                 start_time = time.time()
-                message = self.fernet.decrypt(encrypted).decode()
-                message = json.loads(message)
+                message = await self.decrypt_message(encrypted)
                 latency = time.time() - start_time
                 if self.monitor:
                     self.monitor.log_metric(self.node_id, "latency", latency)
@@ -127,11 +130,11 @@ class HotStuffNode:
                 if self.monitor:
                     self.monitor.log_cpu_memory(self.node_id)
             except Exception as e:
-                self.logger.error(f"Error processing message: {e}")
+                self.logger.error(f"Ошибка при обработке сообщения: {e}")
                 break
 
     async def process_message(self, message: Dict):
-        self.logger.debug(f"Processing {message['type']} from Node {message.get('sender_id', 'unknown')}")
+        self.logger.debug(f"Обработка {message['type']} от узла {message.get('sender_id', 'неизвестно')}")
         self.metrics["messages_received"].append((time.time(), 1))
         if self.monitor:
             self.monitor.log_metric(self.node_id, "messages_received", 1)
@@ -141,19 +144,19 @@ class HotStuffNode:
                 self.behavior_scores[message["sender_id"]] += 1
                 if self.behavior_scores[message["sender_id"]] > 3:
                     self.byzantine_nodes.add(message["sender_id"])
-                    self.logger.warning(f"Marked Node {message['sender_id']} as Byzantine due to invalid prepare votes")
+                    self.logger.warning(f"Узел {message['sender_id']} помечен как византийский из-за некорректных голосов prepare")
         elif message["type"] == "precommit":
             if not await self.receive_vote("precommit", message["sender_id"], message["block"]["hash"], message["round"]):
                 self.behavior_scores[message["sender_id"]] += 1
                 if self.behavior_scores[message["sender_id"]] > 3:
                     self.byzantine_nodes.add(message["sender_id"])
-                    self.logger.warning(f"Marked Node {message['sender_id']} as Byzantine due to invalid precommit votes")
+                    self.logger.warning(f"Узел {message['sender_id']} помечен как византийский из-за некорректных голосов precommit")
         elif message["type"] == "commit":
             if not await self.receive_vote("commit", message["sender_id"], message["block"]["hash"], message["round"]):
                 self.behavior_scores[message["sender_id"]] += 1
                 if self.behavior_scores[message["sender_id"]] > 3:
                     self.byzantine_nodes.add(message["sender_id"])
-                    self.logger.warning(f"Marked Node {message['sender_id']} as Byzantine due to invalid commit votes")
+                    self.logger.warning(f"Узел {message['sender_id']} помечен как византийский из-за некорректных голосов commit")
         elif message["type"] == "recovery_request":
             if (message["sender_id"], message["round"]) not in self.recovery_requests:
                 self.recovery_requests.add((message["sender_id"], message["round"]))
@@ -162,23 +165,27 @@ class HotStuffNode:
             await self.handle_recovery_data(message["data"], message["round"])
         elif message["type"] == "add_node":
             self.nodes.add(message["node_id"])
-            self.logger.info(f"Added Node {message['node_id']} to the network")
+            self.logger.info(f"Добавлен узел {message['node_id']} в сеть")
         elif message["type"] == "remove_node":
             self.nodes.discard(message["node_id"])
-            self.logger.info(f"Removed Node {message['node_id']} from the network")
+            self.logger.info(f"Удален узел {message['node_id']} из сети")
         elif message["type"] == "shard_leader":
             self.shard_leaders[message["shard_id"]] = message["leader_id"]
+            self.logger.info(f"Назначен лидер {message['leader_id']} для шарда {message['shard_id']}")
         elif message["type"] == "shard_load":
             self.shard_load[message["shard_id"]] = message["load"]
+            self.logger.info(f"Обновлена нагрузка для шарда {message['shard_id']}: {message['load']}")
             self.adjust_shards_if_needed()
 
     async def receive_vote(self, vote_type: str, node_id: int, block_hash: str, round: int) -> bool:
         if node_id in self.byzantine_nodes:
-            self.logger.warning(f"Ignoring vote from Byzantine node {node_id}")
+            self.logger.warning(f"Игнорируется голос от византийского узла {node_id}")
             return False
         if round != self.current_round:
+            self.logger.debug(f"Голос от узла {node_id} для раунда {round} не соответствует текущему раунду {self.current_round}")
             return False
         if block_hash != self.current_block.hash:
+            self.logger.debug(f"Голос от узла {node_id} для блока с хэшем {block_hash} не соответствует текущему блоку {self.current_block.hash}")
             return False
         if vote_type == "prepare":
             self.prepare_votes[node_id] = True
@@ -186,7 +193,7 @@ class HotStuffNode:
             self.precommit_votes[node_id] = True
         elif vote_type == "commit":
             self.commit_votes[node_id] = True
-        self.logger.debug(f"Received {vote_type} vote from Node {node_id}")
+        self.logger.debug(f"Получен {vote_type} голос от узла {node_id}")
         return True
 
     async def run_consensus_round(self, transactions: List[Dict]):
@@ -194,10 +201,10 @@ class HotStuffNode:
         self.shard_load[self.shard_id] += len(transactions)
         active_nodes = list(self.nodes - self.byzantine_nodes)
         if not active_nodes:
-            self.logger.error("No active nodes left!")
+            self.logger.error("Нет активных узлов!")
             return
         self.current_leader = self.shard_leaders.get(self.shard_id, active_nodes[self.current_round % len(active_nodes)])
-        self.logger.info(f"Running consensus round {self.current_round}")
+        self.logger.info(f"Запуск раунда консенсуса {self.current_round}")
         if self.node_id == self.current_leader:
             block = await self.propose_block(transactions)
             for node in active_nodes:
@@ -227,8 +234,8 @@ class HotStuffNode:
             self.blockchain.append(self.current_block)
             if self.current_round % self.checkpoint_interval == 0:
                 self.checkpoints[self.current_round] = self.current_block
-                self.logger.info(f"Created checkpoint for round {self.current_round}: {self.current_block}")
-            self.logger.info(f"Committed block: {self.current_block}")
+                self.logger.info(f"Создан чекпоинт для раунда {self.current_round}: {self.current_block}")
+            self.logger.info(f"Блок зафиксирован: {self.current_block}")
             self.current_block = None
             self.prepare_votes = {}
             self.precommit_votes = {}
@@ -241,7 +248,7 @@ class HotStuffNode:
         avg_load = sum(self.shard_load.values()) / len(self.shard_load) if self.shard_load else 0
         if avg_load > 100:
             new_shard_id = max(self.shard_load.keys(), default=-1) + 1
-            self.logger.info(f"Creating new shard {new_shard_id} due to high load")
+            self.logger.info(f"Создание нового шарда {new_shard_id} из-за высокой нагрузки")
             self.shard_leaders[new_shard_id] = random.choice(list(self.nodes - self.byzantine_nodes))
             for node in self.nodes:
                 if node != self.node_id:
@@ -257,11 +264,13 @@ class HotStuffNode:
                 {"type": "recovery_response", "data": {"block": self.checkpoints[round].__dict__}, "round": round, "sender_id": self.node_id},
                 node_id
             )
+            self.logger.info(f"Отправлены данные для восстановления раунда {round} узлу {node_id}")
         elif round < len(self.blockchain):
             await self.send_message(
                 {"type": "recovery_response", "data": {"block": self.blockchain[round].__dict__}, "round": round, "sender_id": self.node_id},
                 node_id
             )
+            self.logger.info(f"Отправлены данные для восстановления раунда {round} узлу {node_id}")
 
     async def handle_recovery_data(self, data: Dict, round: int):
         block_data = data["block"]
@@ -275,29 +284,31 @@ class HotStuffNode:
         block.hash = block_data["hash"]
         if round == len(self.blockchain):
             self.blockchain.append(block)
-            self.logger.info(f"Recovered block for round {round}: {block}")
+            self.logger.info(f"Восстановлен блок для раунда {round}: {block}")
         elif round < len(self.blockchain):
             self.blockchain[round] = block
-            self.logger.info(f"Corrected block for round {round}: {block}")
+            self.logger.info(f"Исправлен блок для раунда {round}: {block}")
 
     def make_byzantine(self):
         self.is_byzantine = True
-        self.logger.warning(f"Node {self.node_id} is now Byzantine!")
+        self.logger.warning(f"Узел {self.node_id} теперь византийский!")
 
     async def add_node(self, node_id: int):
         self.nodes.add(node_id)
         for node in self.nodes:
             if node != self.node_id:
                 await self.send_message({"type": "add_node", "node_id": node_id, "sender_id": self.node_id}, node)
+        self.logger.info(f"Добавлен узел {node_id} в сеть")
 
     async def remove_node(self, node_id: int):
         self.nodes.discard(node_id)
         for node in self.nodes:
             if node != self.node_id:
                 await self.send_message({"type": "remove_node", "node_id": node_id, "sender_id": self.node_id}, node)
+        self.logger.info(f"Удален узел {node_id} из сети")
 
     async def auto_recover(self, target_round: int):
-        self.logger.info(f"Starting auto-recovery to round {target_round}")
+        self.logger.info(f"Начато автоматическое восстановление до раунда {target_round}")
         for round in range(len(self.blockchain), target_round + 1):
             if round not in self.recovery_requests:
                 recipient = random.choice(list(self.nodes - self.byzantine_nodes - {self.node_id}))
