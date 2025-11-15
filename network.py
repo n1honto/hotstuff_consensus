@@ -25,6 +25,5 @@ class HotStuffNetwork:
         await asyncio.sleep(1)
         while True:
             transactions = [{"from": f"Node_{random.randint(0, 999)}", "to": f"Node_{random.randint(0, 999)}", "amount": random.randint(1, 100)} for _ in range(random.randint(1, 10))]
-            await node.run_consensus_round(transactions)
+            await node.run_consensus_round()
             await asyncio.sleep(3)
-            node.plot_metrics()

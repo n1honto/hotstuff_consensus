@@ -3,12 +3,14 @@ import json
 import random
 import time
 import psutil
-from typing import List, Dict, Optional, Set, Tuple
+from typing import List, Dict, Optional, Set, Tuple, Any
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from cryptography.fernet import Fernet
 from block import Block
 from logger import setup_logger
+from distributed_ledger import DistributedLedger
+from transaction import Transaction
 
 class HotStuffNode:
     def __init__(self, node_id: int, nodes: List[int], host: str, port: int, shard_id: int = 0, is_byzantine: bool = False):
@@ -24,7 +26,7 @@ class HotStuffNode:
         self.prepare_votes: Dict[int, bool] = {}
         self.precommit_votes: Dict[int, bool] = {}
         self.commit_votes: Dict[int, bool] = {}
-        self.current_block: Optional[Block] = None
+        self.current_block: Optional[Dict[str, Any]] = None
         self.locked_round = -1
         self.locked_block: Optional[Block] = None
         self.logger = setup_logger(node_id)
@@ -49,12 +51,63 @@ class HotStuffNode:
         self.last_shard_adjustment = time.time()
         self.shard_adjustment_interval = 30
 
-    async def propose_block(self, transactions: List[Dict]) -> Block:
-        previous_hash = self.blockchain[-1].hash if self.blockchain else "0"
-        block = Block(transactions, previous_hash, self.current_leader, self.current_round, self.shard_id)
+        # Инициализация распределенного реестра
+        self.ledger = DistributedLedger()
+        self.ledger.balances[f"Node_{node_id}"] = 1000  # начальные балансы для узлов
+
+    async def add_transaction(self, transaction_dict: Dict[str, Any]):
+        transaction = Transaction(
+            transaction_dict["from"],
+            transaction_dict["to"],
+            transaction_dict["amount"]
+        )
+        self.logger.info(f"Получена транзакция: {transaction}")
+        self.ledger.add_transaction(transaction)
+        self.logger.info(f"Транзакция добавлена в пул. Текущий размер пула: {len(self.ledger.pending_transactions)}")
+
+    async def propose_block(self) -> Dict[str, Any]:
+        pending_transactions = self.ledger.pending_transactions
+        valid_transactions = []
+        for tx in pending_transactions:
+            if self.ledger.validate_transaction(tx):
+                valid_transactions.append(tx)
+            else:
+                self.logger.warning(f"Транзакция отклонена: {tx}")
+
+        block = self.ledger.create_block(valid_transactions, self.node_id, self.current_round)
         self.current_block = block
-        self.logger.info(f"Предложен блок: {block}")
+        self.logger.info(f"Предложен блок с {len(valid_transactions)} транзакциями: {block['hash']}")
         return block
+
+    async def run_consensus_round(self):
+        self.current_round += 1
+        self.shard_load[self.shard_id] += 1
+        active_nodes = list(self.nodes - self.byzantine_nodes)
+
+        if not active_nodes:
+            self.logger.error("Нет активных узлов!")
+            return
+
+        self.current_leader = self.shard_leaders.get(self.shard_id, active_nodes[self.current_round % len(active_nodes)])
+        self.logger.info(f"Запуск раунда консенсуса {self.current_round}. Лидер: {self.current_leader}")
+
+        if self.node_id == self.current_leader:
+            block = await self.propose_block()
+            for node in active_nodes:
+                if node != self.node_id:
+                    await self.send_message(
+                        {"type": "prepare", "block": block, "round": self.current_round, "sender_id": self.node_id},
+                        node
+                    )
+
+        if len(self.commit_votes) > len(active_nodes) * 2 // 3:
+            self.ledger.add_block(self.current_block)
+            self.logger.info(f"Блок зафиксирован: {self.current_block['hash']}")
+            self.logger.info(f"Новые балансы: {self.ledger.balances}")
+            self.current_block = None
+            self.prepare_votes = {}
+            self.precommit_votes = {}
+            self.commit_votes = {}
 
     async def encrypt_message(self, message: Dict) -> bytes:
         self.logger.debug(f"Шифрование сообщения: {message}")
@@ -184,8 +237,8 @@ class HotStuffNode:
         if round != self.current_round:
             self.logger.debug(f"Голос от узла {node_id} для раунда {round} не соответствует текущему раунду {self.current_round}")
             return False
-        if block_hash != self.current_block.hash:
-            self.logger.debug(f"Голос от узла {node_id} для блока с хэшем {block_hash} не соответствует текущему блоку {self.current_block.hash}")
+        if block_hash != self.current_block["hash"]:
+            self.logger.debug(f"Голос от узла {node_id} для блока с хэшем {block_hash} не соответствует текущему блоку {self.current_block['hash']}")
             return False
         if vote_type == "prepare":
             self.prepare_votes[node_id] = True
@@ -195,130 +248,3 @@ class HotStuffNode:
             self.commit_votes[node_id] = True
         self.logger.debug(f"Получен {vote_type} голос от узла {node_id}")
         return True
-
-    async def run_consensus_round(self, transactions: List[Dict]):
-        self.current_round += 1
-        self.shard_load[self.shard_id] += len(transactions)
-        active_nodes = list(self.nodes - self.byzantine_nodes)
-        if not active_nodes:
-            self.logger.error("Нет активных узлов!")
-            return
-        self.current_leader = self.shard_leaders.get(self.shard_id, active_nodes[self.current_round % len(active_nodes)])
-        self.logger.info(f"Запуск раунда консенсуса {self.current_round}")
-        if self.node_id == self.current_leader:
-            block = await self.propose_block(transactions)
-            for node in active_nodes:
-                if node != self.node_id:
-                    await self.send_message(
-                        {"type": "prepare", "block": {"hash": block.hash}, "round": self.current_round, "sender_id": self.node_id},
-                        node
-                    )
-
-        if len(self.prepare_votes) > len(active_nodes) * 2 // 3:
-            for node in active_nodes:
-                if node != self.node_id:
-                    await self.send_message(
-                        {"type": "precommit", "block": {"hash": self.current_block.hash}, "round": self.current_round, "sender_id": self.node_id},
-                        node
-                    )
-
-        if len(self.precommit_votes) > len(active_nodes) * 2 // 3:
-            for node in active_nodes:
-                if node != self.node_id:
-                    await self.send_message(
-                        {"type": "commit", "block": {"hash": self.current_block.hash}, "round": self.current_round, "sender_id": self.node_id},
-                        node
-                    )
-
-        if len(self.commit_votes) > len(active_nodes) * 2 // 3:
-            self.blockchain.append(self.current_block)
-            if self.current_round % self.checkpoint_interval == 0:
-                self.checkpoints[self.current_round] = self.current_block
-                self.logger.info(f"Создан чекпоинт для раунда {self.current_round}: {self.current_block}")
-            self.logger.info(f"Блок зафиксирован: {self.current_block}")
-            self.current_block = None
-            self.prepare_votes = {}
-            self.precommit_votes = {}
-            self.commit_votes = {}
-
-    def adjust_shards_if_needed(self):
-        current_time = time.time()
-        if current_time - self.last_shard_adjustment < self.shard_adjustment_interval:
-            return
-        avg_load = sum(self.shard_load.values()) / len(self.shard_load) if self.shard_load else 0
-        if avg_load > 100:
-            new_shard_id = max(self.shard_load.keys(), default=-1) + 1
-            self.logger.info(f"Создание нового шарда {new_shard_id} из-за высокой нагрузки")
-            self.shard_leaders[new_shard_id] = random.choice(list(self.nodes - self.byzantine_nodes))
-            for node in self.nodes:
-                if node != self.node_id:
-                    asyncio.create_task(self.send_message(
-                        {"type": "shard_leader", "shard_id": new_shard_id, "leader_id": self.shard_leaders[new_shard_id], "sender_id": self.node_id},
-                        node
-                    ))
-            self.last_shard_adjustment = current_time
-
-    async def send_recovery_data(self, node_id: int, round: int):
-        if round in self.checkpoints:
-            await self.send_message(
-                {"type": "recovery_response", "data": {"block": self.checkpoints[round].__dict__}, "round": round, "sender_id": self.node_id},
-                node_id
-            )
-            self.logger.info(f"Отправлены данные для восстановления раунда {round} узлу {node_id}")
-        elif round < len(self.blockchain):
-            await self.send_message(
-                {"type": "recovery_response", "data": {"block": self.blockchain[round].__dict__}, "round": round, "sender_id": self.node_id},
-                node_id
-            )
-            self.logger.info(f"Отправлены данные для восстановления раунда {round} узлу {node_id}")
-
-    async def handle_recovery_data(self, data: Dict, round: int):
-        block_data = data["block"]
-        block = Block(
-            transactions=block_data["transactions"],
-            previous_hash=block_data["previous_hash"],
-            leader_id=block_data["leader_id"],
-            round=block_data["round"],
-            shard_id=block_data["shard_id"]
-        )
-        block.hash = block_data["hash"]
-        if round == len(self.blockchain):
-            self.blockchain.append(block)
-            self.logger.info(f"Восстановлен блок для раунда {round}: {block}")
-        elif round < len(self.blockchain):
-            self.blockchain[round] = block
-            self.logger.info(f"Исправлен блок для раунда {round}: {block}")
-
-    def make_byzantine(self):
-        self.is_byzantine = True
-        self.logger.warning(f"Узел {self.node_id} теперь византийский!")
-
-    async def add_node(self, node_id: int):
-        self.nodes.add(node_id)
-        for node in self.nodes:
-            if node != self.node_id:
-                await self.send_message({"type": "add_node", "node_id": node_id, "sender_id": self.node_id}, node)
-        self.logger.info(f"Добавлен узел {node_id} в сеть")
-
-    async def remove_node(self, node_id: int):
-        self.nodes.discard(node_id)
-        for node in self.nodes:
-            if node != self.node_id:
-                await self.send_message({"type": "remove_node", "node_id": node_id, "sender_id": self.node_id}, node)
-        self.logger.info(f"Удален узел {node_id} из сети")
-
-    async def auto_recover(self, target_round: int):
-        self.logger.info(f"Начато автоматическое восстановление до раунда {target_round}")
-        for round in range(len(self.blockchain), target_round + 1):
-            if round not in self.recovery_requests:
-                recipient = random.choice(list(self.nodes - self.byzantine_nodes - {self.node_id}))
-                await self.send_message(
-                    {"type": "recovery_request", "round": round, "sender_id": self.node_id},
-                    recipient
-                )
-                self.recovery_requests.add((self.node_id, round))
-                await asyncio.sleep(0.5)
-
-    def plot_metrics(self):
-        if self.monitor:
-            self.monitor.plot_metrics()
